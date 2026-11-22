@@ -1,0 +1,17 @@
+# Build output
+build/
+bin/
+*.o
+*.a
+*.so
+*.exe
+
+# Generated protobuf code: regenerate from proto/ instead of committing it
+gen/
+*.pb-c.c
+*.pb-c.h
+
+# Editors and OS files
+.idea/
+*.swp
+.DS_Store

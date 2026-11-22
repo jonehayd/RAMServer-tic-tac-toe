@@ -1,0 +1,25 @@
+# Runs the development environment in a container, with this repository mounted inside it:
+#
+#   docker compose run --rm dev make test     # run every test
+#   docker compose run --rm dev bash          # open a shell to build and run things
+#
+# The first run builds the image, which takes a few minutes. Rebuild after changing the Dockerfile or
+# scripts/install-deps.sh with: docker compose build
+services:
+  dev:
+    build: .
+    image: ramserver-tictactoe-dev
+    volumes:
+      - .:/workspace
+      - go-cache:/go/pkg/mod        # downloaded Go modules, kept between runs
+      - go-build:/root/.cache/go-build
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    # The client reaches a server on your own machine at host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  go-cache:
+  go-build:

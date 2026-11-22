@@ -27,8 +27,11 @@ client has, so write it before the client depends on it.
 
 - Run every test before reporting work as done, and report the commands and their results honestly,
   including failures.
-- Keep builds reproducible: pin tool and library versions, and make one command run all tests (for
-  example `make test`). Document every dependency and how to install it.
+- Keep builds reproducible. `make test` at the repository root must run every test. Give `client/` a
+  Makefile with a `test` target, and `make test` runs it too.
+- Build with the tools in `scripts/install-deps.sh`, which the `Dockerfile` also uses. If you need
+  another system package, add it there, so every machine and the container stay the same. Go modules
+  go in `go.mod` as usual; never add the RAMServer module itself (it comes from `sdk/`).
 - Make reasonable decisions on your own, and record the significant ones (and why) in the relevant
   README.
 - When something is ambiguous in the documentation, choose the reading that follows the protocol most
