@@ -22,6 +22,7 @@ the server through a documented protobuf protocol and never see each other direc
 | `docs/writing-a-client.md`           | How a client should connect, play, and handle errors.                                                                              |
 | `docs/servers.md`                    | The local and hosted servers, and how a new ruleset reaches them.                                                                  |
 | `proto/ramserver/v1/ramserver.proto` | The protocol schema. Generate client code from it.                                                                                 |
+| `rulesets/tictactoe/`                | The tic-tac-toe ruleset, its tests, and its README: the specification of the game's actions, views and annotations.                |
 | `sdk/`                               | The server's public `game` package, which rulesets implement, and its compliance tests (`sdk/game/gametest`). See `sdk/README.md`. |
 | `go.mod`                             | This repository's Go module. It points the server's import path at `sdk/`, so nothing is downloaded.                               |
 | `server/`                            | A local server build, once the ruleset has been integrated (see `docs/servers.md`).                                                |
