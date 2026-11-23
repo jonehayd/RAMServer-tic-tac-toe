@@ -23,6 +23,7 @@ the server through a documented protobuf protocol and never see each other direc
 | `docs/servers.md`                    | The local and hosted servers, and how a new ruleset reaches them.                                                                  |
 | `proto/ramserver/v1/ramserver.proto` | The protocol schema. Generate client code from it.                                                                                 |
 | `rulesets/tictactoe/`                | The tic-tac-toe ruleset, its tests, and its README: the specification of the game's actions, views and annotations.                |
+| `client/`                            | The C client (`ttt`): terminal UI, protocol and networking, unit and integration tests. See `client/README.md`.                     |
 | `sdk/`                               | The server's public `game` package, which rulesets implement, and its compliance tests (`sdk/game/gametest`). See `sdk/README.md`. |
 | `go.mod`                             | This repository's Go module. It points the server's import path at `sdk/`, so nothing is downloaded.                               |
 | `server/`                            | A local server build, once the ruleset has been integrated (see `docs/servers.md`).                                                |
@@ -64,7 +65,8 @@ docker compose run --rm dev bash        # a shell inside the container, to build
 **Without Docker (Debian/Ubuntu, including WSL):** install Go 1.24 or newer, run `make check-deps` to
 install the same packages, then `make test`.
 
-The C client's tests join `make test` once `client/` has a Makefile with a `test` target.
+`make test` also runs the C client's tests (`make -C client test`). To play, build the client with
+`make -C client` and see `client/README.md`.
 
 ## Versions
 
