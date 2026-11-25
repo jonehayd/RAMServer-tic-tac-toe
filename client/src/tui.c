@@ -277,14 +277,63 @@ static void draw_logo(int r, int c) {
 /* The board: 3x3 cells of 9x3 characters inside grid lines, 31 columns by 13 rows */
 #define BOARD_W 31
 #define BOARD_H 13
+#define UTT_BOARD_W 11
+#define UTT_BOARD_H 11
 
 static void board_cell_origin(int bi, int r0, int c0, int *r, int *c) {
     *r = r0 + 1 + (bi / 3) * 4;
     *c = c0 + 1 + (bi % 3) * 10;
 }
 
+static void draw_ultimate_board(app *a, int r0, int c0) {
+    ttt_client *cl = &a->client;
+    const ultimate_view *v = &cl->ultimate_board;
+    bool have = cl->has_board;
+    bool live = client_in_match(cl);
+    bool my_turn = client_my_turn(cl);
+    style grid = st(C_GRAY, C_DEFAULT, 0);
+
+    for (int row = 0; row < 9; row++) {
+        int r = r0 + row + row / 3;
+        for (int col = 0; col < 9; col++) {
+            int c = c0 + col + col / 3;
+            int board = (row / 3) * 3 + col / 3;
+            int cell = (row % 3) * 3 + col % 3;
+            int global_cell = row * 9 + col;
+            char mark = have ? v->cells[board * UTT_CELLS + cell] : '.';
+            if (have && v->local_status[board] != '.') mark = v->local_status[board] == 'D' ? '=' : v->local_status[board];
+            else if (mark == '.' && live) mark = (char)('1' + cell);
+            else if (mark == '.') mark = ' ';
+
+            bool in_line = cl->has_line && (cl->line[0] == board || cl->line[1] == board || cl->line[2] == board);
+            bool cursor = live && my_turn && T.cursor == global_cell;
+            bool last = live && cl->last_move == board * UTT_CELLS + cell;
+            int bg = in_line ? C_GREEN : (v->next_board == board && live ? C_BLUE : C_DEFAULT);
+            if (cursor) bg = mark == ' ' || (mark >= '1' && mark <= '9') ? C_BLUE : C_RED;
+            style s = mark_style(mark, have && !live && cl->has_result);
+            s.bg = (signed char)bg;
+            if (last && !cursor) { s.fg = C_BMAGENTA; s.attr |= A_BOLD; }
+            put(r, c, s, (char[]){mark, 0});
+        }
+        put(r, c0 + 3, grid, T.opt.ascii ? "|" : "│");
+        put(r, c0 + 7, grid, T.opt.ascii ? "|" : "│");
+        if (row == 2 || row == 5) {
+            int line_r = r + 1;
+            for (int col = 0; col < UTT_BOARD_W; col++) {
+                const char *ch = (col == 3 || col == 7) ? "+" : "-";
+                if (!T.opt.ascii) ch = (col == 3 || col == 7) ? "┼" : "─";
+                put(line_r, c0 + col, grid, ch);
+            }
+        }
+    }
+}
+
 static void draw_board(app *a, int r0, int c0, uint64_t now) {
     ttt_client *cl = &a->client;
+    if (cl->game == CLIENT_GAME_ULTIMATE) {
+        draw_ultimate_board(a, r0, c0);
+        return;
+    }
     bool u = !T.opt.ascii;
     style grid = st(C_GRAY, C_DEFAULT, 0);
     /* grid lines */
@@ -379,7 +428,10 @@ static void draw_keys(int r, const char *const *pairs) {
 static void draw_status_bar(app *a) {
     style bar = st(C_BWHITE, C_BLUE, 0);
     fill(0, 0, T.cols, bar);
-    put(0, 1, st(C_BWHITE, C_BLUE, A_BOLD), T.opt.ascii ? "RAMServer tic-tac-toe" : "RAMServer ▸ tic-tac-toe");
+    const char *title = a->client.game == CLIENT_GAME_ULTIMATE
+        ? (T.opt.ascii ? "RAMServer Ultimate Tic-Tac-Toe" : "RAMServer ▸ Ultimate Tic-Tac-Toe")
+        : (T.opt.ascii ? "RAMServer tic-tac-toe" : "RAMServer ▸ tic-tac-toe");
+    put(0, 1, st(C_BWHITE, C_BLUE, A_BOLD), title);
     char right[400], buf[400];
     const char *conn = a->conn == CONN_OPEN ? (T.opt.ascii ? "online" : "● online")
                        : a->conn == CONN_CONNECTING ? (T.opt.ascii ? "connecting" : "◌ connecting")
@@ -556,13 +608,15 @@ static void draw_status_message(app *a, int r, int c0, int w, uint64_t now) {
         return;
     }
     if (client_in_match(cl)) {
-        char tm = ttt_view_to_move(&cl->board);
+        char tm = client_to_move(cl);
         if (client_my_turn(cl)) {
             style s = st(C_BLACK, tm == 'X' ? C_BCYAN : C_BYELLOW, A_BOLD);
             if (!pulse) s = st(tm == 'X' ? C_BCYAN : C_BYELLOW, C_DEFAULT, A_BOLD);
             snprintf(buf, sizeof buf, T.opt.ascii ? " > YOUR MOVE (%c) " : " ▶ YOUR MOVE (%c) ", tm);
             put(r, c0, s, buf);
-            put(r + 1, c0, st(C_GRAY, C_DEFAULT, 0), "Arrows/WASD + Enter, a digit 1-9, or click a cell.");
+            put(r + 1, c0, st(C_GRAY, C_DEFAULT, 0), cl->game == CLIENT_GAME_ULTIMATE
+                ? "Arrows/WASD + Enter, digits select local cell, or click a cell."
+                : "Arrows/WASD + Enter, a digit 1-9, or click a cell.");
         } else {
             snprintf(who, sizeof who, "%s", client_name_of(cl, cl->active_id));
             snprintf(buf, sizeof buf, "Waiting for %s (%c)%s", fit(who, w - 20, buf + 100, 100), tm, pulse ? "..." : "   ");
@@ -582,7 +636,12 @@ static void draw_status_message(app *a, int r, int c0, int w, uint64_t now) {
         else if (lost) { s = st(C_BWHITE, C_RED, A_BOLD); snprintf(buf, sizeof buf, " YOU LOSE "); }
         else { s = st(C_BLACK, C_WHITE, A_BOLD); snprintf(buf, sizeof buf, " %.60s WINS ", client_name_of(cl, res->winner)); }
         int c = put(r, c0, s, buf);
-        putf(r, c + 1, st(C_GRAY, C_DEFAULT, 0), "by %s, %u turn%s", how, res->turns, res->turns == 1 ? "" : "s");
+        if (res->draw && cl->game == CLIENT_GAME_ULTIMATE && strcmp(res->termination, "DRAW") == 0)
+            putf(r, c + 1, st(C_GRAY, C_DEFAULT, 0), "all local boards resolved, %u turn%s", res->turns,
+                 res->turns == 1 ? "" : "s");
+        else
+            putf(r, c + 1, st(C_GRAY, C_DEFAULT, 0), "by %s, %u turn%s", how, res->turns,
+                 res->turns == 1 ? "" : "s");
     }
     int rr = r + (cl->has_result ? 2 : 0);
     if (cl->status == RAMSERVER__V1__SESSION_STATUS__SESSION_STATUS_WAITING) {
@@ -602,12 +661,14 @@ static void draw_status_message(app *a, int r, int c0, int w, uint64_t now) {
 
 static void draw_game(app *a, uint64_t now) {
     ttt_client *cl = &a->client;
+    int board_w = cl->game == CLIENT_GAME_ULTIMATE ? UTT_BOARD_W : BOARD_W;
+    int board_h = cl->game == CLIENT_GAME_ULTIMATE ? UTT_BOARD_H : BOARD_H;
     bool wide = T.cols >= 80;
     int br = 2, bc = 2;
     draw_board(a, br, bc, now);
 
-    int pr = wide ? 2 : br + BOARD_H + 1;
-    int pc = wide ? bc + BOARD_W + 4 : 2;
+    int pr = wide ? 2 : br + board_h + 1;
+    int pc = wide ? bc + board_w + 4 : 2;
     int pw = T.cols - pc - 2;
     char buf[300];
 
@@ -650,16 +711,22 @@ static void draw_game(app *a, uint64_t now) {
     r++;
     draw_status_message(a, r, pc, pw, now);
 
-    int log_top = wide ? (br + BOARD_H + 1) : (r + 4);
+    int log_top = wide ? (br + board_h + 1) : (r + 4);
     int log_h = T.rows - 2 - log_top;
     if (T.prompt != PROMPT_NONE) log_h -= 3;
     if (log_h >= 3) draw_log(a, log_top, 1, T.cols - 2, log_h);
 
     if (client_in_match(cl)) {
         if (client_is_player(cl)) {
-            static const char *keys[] = {"←↑→↓", "move", "Enter", "place", "1-9", "place", "F", "resign", "L", "leave", "?", "help", NULL};
-            static const char *keys_a[] = {"Arrows", "move", "Enter", "place", "1-9", "place", "F", "resign", "L", "leave", "?", "help", NULL};
-            draw_keys(T.rows - 1, T.opt.ascii ? keys_a : keys);
+            if (cl->game == CLIENT_GAME_ULTIMATE) {
+                static const char *keys[] = {"←↑→↓", "move", "Enter", "place", "1-9", "local cell", "F", "resign", "L", "leave", "?", "help", NULL};
+                static const char *keys_a[] = {"Arrows", "move", "Enter", "place", "1-9", "local cell", "F", "resign", "L", "leave", "?", "help", NULL};
+                draw_keys(T.rows - 1, T.opt.ascii ? keys_a : keys);
+            } else {
+                static const char *keys[] = {"←↑→↓", "move", "Enter", "place", "1-9", "place", "F", "resign", "L", "leave", "?", "help", NULL};
+                static const char *keys_a[] = {"Arrows", "move", "Enter", "place", "1-9", "place", "F", "resign", "L", "leave", "?", "help", NULL};
+                draw_keys(T.rows - 1, T.opt.ascii ? keys_a : keys);
+            }
         } else {
             static const char *keys[] = {"L", "leave", "Q", "quit", "?", "help", NULL};
             draw_keys(T.rows - 1, keys);
@@ -679,7 +746,9 @@ static void draw_help(void) {
         "Waiting   R ready / not ready   Y copy the session id",
         "Playing   arrows, WASD or hjkl move the cursor",
         "          Enter or Space places your mark there",
-        "          1-9 place directly (1 = top-left, 9 = bottom-right)",
+        "          Tic-tac-toe: 1-9 place directly",
+        "          Ultimate: 1-9 choose a cell in the cursor's local board",
+        "          Ultimate action digits are board then cell (both 0-8)",
         "          or click a cell with the mouse",
         "          F twice resigns",
         "Anywhere  L leave the session (twice during a match)",
@@ -727,10 +796,31 @@ static void tui_render(void *self, app *a, uint64_t now) {
     /* Your-turn detection: center the cursor on a fresh match, ring the bell if asked */
     bool my_turn = client_my_turn(cl);
     if (my_turn && !T.was_my_turn) {
-        if (cl->moves == 0) T.cursor = 4;
-        if (cl->board.cells[T.cursor] != '.') {
-            for (int i = 0; i < TTT_CELLS; i++)
-                if (cl->board.cells[(4 + i) % TTT_CELLS] == '.') { T.cursor = (4 + i) % TTT_CELLS; break; }
+        if (cl->game == CLIENT_GAME_ULTIMATE) {
+            int board = cl->ultimate_board.next_board;
+            if (board < 0) board = 4;
+            if (cl->ultimate_board.local_status[board] != '.') {
+                for (int i = 0; i < UTT_BOARDS; i++) {
+                    int candidate = (4 + i) % UTT_BOARDS;
+                    if (cl->ultimate_board.local_status[candidate] == '.') { board = candidate; break; }
+                }
+            }
+            int cell = 4;
+            if (cl->ultimate_board.cells[board * UTT_CELLS + cell] != '.') {
+                for (int i = 0; i < UTT_CELLS; i++) {
+                    int candidate = (4 + i) % UTT_CELLS;
+                    if (cl->ultimate_board.cells[board * UTT_CELLS + candidate] == '.') { cell = candidate; break; }
+                }
+            }
+            int row = (board / 3) * 3 + cell / 3;
+            int col = (board % 3) * 3 + cell % 3;
+            T.cursor = row * 9 + col;
+        } else {
+            if (cl->moves == 0) T.cursor = 4;
+            if (cl->board.cells[T.cursor] != '.') {
+                for (int i = 0; i < TTT_CELLS; i++)
+                    if (cl->board.cells[(4 + i) % TTT_CELLS] == '.') { T.cursor = (4 + i) % TTT_CELLS; break; }
+            }
         }
         if (T.opt.bell) outs("\a");
     }
@@ -870,13 +960,37 @@ static void quit_key(app *a, uint64_t now) {
 
 static int lower(int k) { return (k >= 'A' && k <= 'Z') ? k + 32 : k; }
 
-static void move_cursor(int dr, int dc) {
-    int r = T.cursor / 3 + dr, c = T.cursor % 3 + dc;
-    if (r < 0) r = 2;
-    if (r > 2) r = 0;
-    if (c < 0) c = 2;
-    if (c > 2) c = 0;
-    T.cursor = r * 3 + c;
+static void move_cursor(int dr, int dc, bool ultimate) {
+    int width = ultimate ? 9 : 3;
+    int r = T.cursor / width + dr, c = T.cursor % width + dc;
+    if (r < 0) r = width - 1;
+    if (r >= width) r = 0;
+    if (c < 0) c = width - 1;
+    if (c >= width) c = 0;
+    T.cursor = r * width + c;
+}
+
+static void ultimate_cursor_action(int cursor, int *board, int *cell) {
+    int row = cursor / 9, col = cursor % 9;
+    *board = (row / 3) * 3 + col / 3;
+    *cell = (row % 3) * 3 + col % 3;
+}
+
+static int ultimate_cursor_for(int board, int cell) {
+    int row = (board / 3) * 3 + cell / 3;
+    int col = (board % 3) * 3 + cell % 3;
+    return row * 9 + col;
+}
+
+static void place_cursor_move(app *a) {
+    ttt_client *cl = &a->client;
+    if (cl->game == CLIENT_GAME_ULTIMATE) {
+        int board, cell;
+        ultimate_cursor_action(T.cursor, &board, &cell);
+        client_cmd_ultimate_move(cl, board, cell, a->guard);
+    } else {
+        client_cmd_move(cl, T.cursor, a->guard);
+    }
 }
 
 static void game_key(app *a, int key, uint64_t now) {
@@ -884,22 +998,30 @@ static void game_key(app *a, int key, uint64_t now) {
     int k = lower(key);
     bool match = client_in_match(cl);
     switch (key) {
-    case K_UP: move_cursor(-1, 0); return;
-    case K_DOWN: move_cursor(1, 0); return;
-    case K_LEFT: move_cursor(0, -1); return;
-    case K_RIGHT: move_cursor(0, 1); return;
-    case K_ENTER: if (match) client_cmd_move(cl, T.cursor, a->guard); return;
+    case K_UP: move_cursor(-1, 0, cl->game == CLIENT_GAME_ULTIMATE); return;
+    case K_DOWN: move_cursor(1, 0, cl->game == CLIENT_GAME_ULTIMATE); return;
+    case K_LEFT: move_cursor(0, -1, cl->game == CLIENT_GAME_ULTIMATE); return;
+    case K_RIGHT: move_cursor(0, 1, cl->game == CLIENT_GAME_ULTIMATE); return;
+    case K_ENTER: if (match) place_cursor_move(a); return;
     default: break;
     }
     if (match && client_is_player(cl)) {
-        if (k == 'w' || k == 'k') { move_cursor(-1, 0); return; }
-        if (k == 's' || k == 'j') { move_cursor(1, 0); return; }
-        if (k == 'a' || k == 'h') { move_cursor(0, -1); return; }
-        if (k == 'd') { move_cursor(0, 1); return; }
-        if (k == ' ') { client_cmd_move(cl, T.cursor, a->guard); return; }
+        if (k == 'w' || k == 'k') { move_cursor(-1, 0, cl->game == CLIENT_GAME_ULTIMATE); return; }
+        if (k == 's' || k == 'j') { move_cursor(1, 0, cl->game == CLIENT_GAME_ULTIMATE); return; }
+        if (k == 'a' || k == 'h') { move_cursor(0, -1, cl->game == CLIENT_GAME_ULTIMATE); return; }
+        if (k == 'd') { move_cursor(0, 1, cl->game == CLIENT_GAME_ULTIMATE); return; }
+        if (k == ' ') { place_cursor_move(a); return; }
         if (key >= '1' && key <= '9') {
-            T.cursor = key - '1';
-            client_cmd_move(cl, key - '1', a->guard);
+            if (cl->game == CLIENT_GAME_ULTIMATE) {
+                int board, ignored;
+                ultimate_cursor_action(T.cursor, &board, &ignored);
+                int cell = key - '1';
+                T.cursor = ultimate_cursor_for(board, cell);
+                client_cmd_ultimate_move(cl, board, cell, a->guard);
+            } else {
+                T.cursor = key - '1';
+                client_cmd_move(cl, key - '1', a->guard);
+            }
             return;
         }
         if (k == 'f') {
@@ -941,6 +1063,18 @@ static void lobby_key(app *a, int key, uint64_t now) {
 static void mouse_click(app *a, int row, int col) {
     /* row/col are 1-based; the board's top-left is at grid (2, 2) */
     int r = row - 1 - 2, c = col - 1 - 2;
+    if (a->client.game == CLIENT_GAME_ULTIMATE) {
+        if (r < 0 || c < 0 || r >= UTT_BOARD_H || c >= UTT_BOARD_W || r == 3 || r == 7 || c == 3 || c == 7) return;
+        if (r > 7) r -= 2;
+        else if (r > 3) r--;
+        if (c > 7) c -= 2;
+        else if (c > 3) c--;
+        int board = (r / 3) * 3 + c / 3;
+        int cell = (r % 3) * 3 + c % 3;
+        T.cursor = r * 9 + c;
+        client_cmd_ultimate_move(&a->client, board, cell, a->guard);
+        return;
+    }
     if (r <= 0 || c <= 0 || r >= BOARD_H - 1 || c >= BOARD_W - 1) return;
     if (r % 4 == 0 || c % 10 == 0) return; /* a grid line */
     int idx = (r / 4) * 3 + (c / 10);

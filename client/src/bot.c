@@ -59,3 +59,25 @@ int bot_choose(const char cells[TTT_CELLS], char mark, bot_skill skill, unsigned
     }
     return best[next_rand(seed) % (unsigned)n_best];
 }
+
+bool bot_choose_ultimate(const ultimate_view *view, unsigned *seed, int *board, int *cell) {
+    int legal_board[UTT_BOARDS * UTT_CELLS];
+    int legal_cell[UTT_BOARDS * UTT_CELLS];
+    int n = 0;
+    if (!ultimate_view_running(view)) return false;
+    for (int b = 0; b < UTT_BOARDS; b++) {
+        if (view->next_board >= 0 && b != view->next_board) continue;
+        if (view->local_status[b] != '.') continue;
+        for (int c = 0; c < UTT_CELLS; c++) {
+            if (view->cells[b * UTT_CELLS + c] != '.') continue;
+            legal_board[n] = b;
+            legal_cell[n] = c;
+            n++;
+        }
+    }
+    if (n == 0) return false;
+    unsigned choice = next_rand(seed) % (unsigned)n;
+    *board = legal_board[choice];
+    *cell = legal_cell[choice];
+    return true;
+}

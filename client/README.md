@@ -1,6 +1,6 @@
 # ttt: a tic-tac-toe client for RAMServer
 
-A C client that plays tic-tac-toe against other people through a RAMServer, either a local server over
+A C client that plays standard or Ultimate Tic-Tac-Toe against other people through a RAMServer, either a local server over
 TCP (or WebSocket) or the hosted server over WebSocket with TLS. It runs in a terminal as a full-screen
 interface with colours, keyboard and mouse input, and box-drawn X and O pieces. A line-based mode is
 available for scripts, and a bot can play automatically.
@@ -29,7 +29,7 @@ available for scripts, and a bot can play automatically.
   ←↑→↓  move   Enter  place   1-9  place   F  resign   L  leave   ?  help
 ```
 
-The game's encodings come from `rulesets/tictactoe/README.md`, and everything else from `docs/`.
+The game's encodings come from `rulesets/tictactoe/README.md` and `rulesets/ultimatetictactoe/README.md`; the rest of the client follows `docs/`.
 
 ## Building
 
@@ -84,6 +84,8 @@ With no options, it asks which server to use and what to call you. To skip that 
 | Anything else | `client/ttt --server HOST:PORT`, or `ws://HOST:PORT/connect`, or `wss://HOST/connect` |
 
 Add `--name Ada` to choose your display name (the default is `$TTT_NAME`, then `$USER`).
+Choose Ultimate Tic-Tac-Toe with `--game ultimate`; `--game tictactoe` (the default) selects the
+standard game. The selection applies to quick matches, created sessions, joining by id, and browsing.
 
 - **From inside the Docker container**, a server running on your own machine is at
   `host.docker.internal`: `client/ttt --server host.docker.internal:8080`. The hosted server works
@@ -111,6 +113,8 @@ one.
    leave the session, or **Q** to quit.
 
 The same thing from the command line: `--create` in the first terminal, `--join <id>` in the second.
+To play Ultimate instead, add `--game ultimate` to both commands; both players must join the same
+game id. For example, `client/ttt --game ultimate --server local --quick --name Ada`.
 
 **With quick match (a local server with no one else on it):** press **M** in both terminals, or start
 both with `--quick`. The first creates a public session and the second joins it.
@@ -125,8 +129,9 @@ joins once it has started). Spectators see every move and result live.
 client/ttt --server local --quick --bot --casual --name Robot
 ```
 
-`--bot` plays perfectly (you can't beat it, only draw), and `--casual` makes a random move a third of
-the time.
+For standard tic-tac-toe, `--bot` plays perfectly (you can't beat it, only draw), and `--casual` makes
+a random move a third of the time. For Ultimate Tic-Tac-Toe, `--bot` picks a random legal board/cell
+move; `--casual` does not change that strategy.
 
 ## Controls
 
@@ -145,6 +150,9 @@ the time.
 | | Enter or Space | place your mark under the cursor |
 | | 1-9 | place directly: 1 is top-left, 9 bottom-right, in reading order. Empty cells show their number. |
 | | mouse click | place your mark in that cell |
+| Ultimate | ← ↑ → ↓, WASD or hjkl | move around the 9×9 global grid |
+| | 1-9 | choose a cell in the local board under the cursor |
+| | Enter, Space or mouse click | place in the selected global cell |
 | | F, F | resign (press twice within 3 s) |
 | Anywhere in a session | L | leave the session (twice during a match, since it forfeits) |
 | Anywhere | Q or Ctrl-C | quit: leaves the session first, then closes the connection |
@@ -157,6 +165,7 @@ the time.
 ```
 -s, --server SPEC    local | local-ws | hosted | HOST:PORT | tcp://... | ws://... | wss://...
 -n, --name NAME      your display name (up to 32 characters)
+    --game GAME      tictactoe (default) or ultimate
     --quick | --create | --create-public | --join ID     find a game straight after signing in
     --plain          line-based interface (automatic when stdin/stdout isn't a terminal)
     --ascii          no Unicode box drawing
@@ -172,8 +181,9 @@ the time.
 ### Plain mode
 
 `--plain` prints events and boards as lines, and reads commands from stdin: `quick`, `create`,
-`create public`, `join <id>`, `list`, `ready`, `unready`, `1`-`9` (or `move 5`), `resign`, `leave`,
-`who`, `board`, `reconnect`, `quit`, and `help`. End of input quits, except with `--bot`.
+`create public`, `join <id>`, `list`, `ready`, `unready`, `1`-`9` (or `move 5`) for standard tic-tac-toe,
+and `00`-`88` (or `move 48`) for Ultimate; both games also support `resign`, `leave`, `who`, `board`,
+`reconnect`, `quit`, and `help`. End of input quits, except with `--bot`.
 
 ### Debugging
 
@@ -190,13 +200,12 @@ make -C client test
 
 From the repository root, `make test` runs this too. It needs no server, network or display.
 
-- **Unit tests** (`tests/test_*.c`, cmocka, 56 tests):
+- **Unit tests** (`tests/test_*.c`, cmocka):
   - `test_frame`: framing, including byte-at-a-time reads, prefixes split at every offset, several frames
     in one read, a frame plus part of the next, heartbeats among messages, a maximum-size (64 KiB) frame,
     and rejecting oversized lengths before reading the payload.
   - `test_proto`: building every request the client sends, decoded again and checked field by field.
-  - `test_view`: decoding views, against every example in the ruleset README plus malformed ones, and
-    building actions.
+  - `test_view`: decoding standard and Ultimate views, including malformed ones, and building actions.
   - `test_client`: session state driven by sequences of hand-built server messages:
     - handshake and sign-in
     - each way of joining, and join errors
@@ -214,7 +223,8 @@ From the repository root, `make test` runs this too. It needs no server, network
   `tests/fakeserver`, a stand-in server described below.
   - Alice creates a private session, Bob joins it by id, and Cy joins as a spectator. They play three
     matches with rematches, then leave cleanly.
-  - Two clients find each other by quick match and play a match.
+  - Two clients find each other by quick match and play a standard match.
+  - Two clients select Ultimate, route to their forced boards, and complete a full match.
   - A move sent out of turn shows the server's `OUT_OF_TURN` error, and a resignation ends the match.
   - The server counts heartbeats and checks every client answers each one, exactly once.
 - `make -C client memcheck` runs the unit tests under valgrind; they're clean.
@@ -226,8 +236,9 @@ one once the ruleset is integrated), and the hosted server doesn't have tic-tac-
 `tests/fakeserver` is a small Go program, written only from `docs/protocol.md`, `docs/framing.md` and
 `docs/writing-a-ruleset.md`.
 
-It implements the session flow over TCP and drives the **real ruleset** (`rulesets/tictactoe`) through
-`game.Game`, so the integration test also checks that the client and the ruleset agree on the encodings.
+It implements the session flow over TCP and drives both **real rulesets** (`rulesets/tictactoe` and
+`rulesets/ultimatetictactoe`) through `game.Game`, so the integration test also checks that the client
+and each ruleset agree on the encodings.
 It is a test double, not RAMServer, and it encodes my reading of the documents: where they're silent, it
 is no evidence of what the real server does.
 

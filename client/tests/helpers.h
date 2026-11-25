@@ -28,6 +28,7 @@ sm_bytes sm_state(uint64_t in_reply_to, const char *session_id, int status, uint
 
 /* A ListSessionsResponse with n sessions: ids[i], joinable[i] */
 sm_bytes sm_list(int n, const char *const *ids, const bool *joinable);
+sm_bytes sm_list_game(int n, const char *const *ids, const bool *joinable, const char *game_id);
 /* A MatchHistoryResponse: winners[i] NULL for a draw */
 sm_bytes sm_history(const char *session_id, int n, const char *const *winners);
 

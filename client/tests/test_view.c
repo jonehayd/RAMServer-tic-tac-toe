@@ -103,12 +103,85 @@ static void test_parse_line(void **s) {
     assert_false(ttt_parse_line(NULL, l));
 }
 
+static void test_ultimate_view_and_actions(void **s) {
+    (void)s;
+    uint8_t bytes[UTT_VIEW_LEN];
+    memset(bytes, '.', 91);
+    bytes[81 + 5] = 'D';
+    bytes[90] = '4';
+    bytes[91] = 'O';
+    bytes[92] = 'O';
+    ultimate_view v;
+    assert_true(ultimate_view_decode(bytes, sizeof bytes, &v));
+    assert_int_equal(v.cells[0], '.');
+    assert_int_equal(v.local_status[5], 'D');
+    assert_int_equal(v.next_board, 4);
+    assert_int_equal(v.status, TTT_RUNNING_O);
+    assert_int_equal(v.me, 'O');
+    assert_true(ultimate_view_my_turn(&v));
+    assert_int_equal(ultimate_view_to_move(&v), 'O');
+
+    bytes[90] = '.';
+    bytes[91] = 'x';
+    assert_true(ultimate_view_decode(bytes, sizeof bytes, &v));
+    assert_false(ultimate_view_running(&v));
+    assert_int_equal(ultimate_view_winner(&v), 'X');
+    bytes[91] = 'D';
+    for (int board = 0; board < UTT_BOARDS; board++) memcpy(bytes + board * UTT_CELLS, "XOXXOOOXX", UTT_CELLS);
+    memset(bytes + 81, 'D', UTT_BOARDS);
+    bytes[90] = '.';
+    assert_true(ultimate_view_decode(bytes, sizeof bytes, &v));
+    assert_int_equal(v.status, TTT_DRAW);
+
+    uint8_t action[2];
+    assert_int_equal(ultimate_action_move(4, 8, action), 2);
+    assert_memory_equal(action, "48", 2);
+    assert_int_equal(ultimate_action_move(-1, 0, action), 0);
+    assert_int_equal(ultimate_action_move(9, 0, action), 0);
+    assert_int_equal(ultimate_action_move(0, 9, action), 0);
+}
+
+static void test_rejects_bad_ultimate_views(void **s) {
+    (void)s;
+    uint8_t bytes[UTT_VIEW_LEN];
+    memset(bytes, '.', 91);
+    bytes[91] = 'X';
+    bytes[92] = 'S';
+    ultimate_view v;
+    memset(&v, 0x5a, sizeof v);
+    ultimate_view before = v;
+    assert_false(ultimate_view_decode(bytes, sizeof bytes - 1, &v));
+    assert_memory_equal(&v, &before, sizeof v);
+    bytes[17] = 'Z';
+    assert_false(ultimate_view_decode(bytes, sizeof bytes, &v));
+    bytes[17] = '.';
+    bytes[81] = 'z';
+    assert_false(ultimate_view_decode(bytes, sizeof bytes, &v));
+    bytes[81] = '.';
+    bytes[90] = '9';
+    assert_false(ultimate_view_decode(bytes, sizeof bytes, &v));
+    bytes[90] = '.';
+    bytes[92] = '?';
+    assert_false(ultimate_view_decode(bytes, sizeof bytes, &v));
+    assert_memory_equal(&v, &before, sizeof v);
+    bytes[92] = 'X';
+    bytes[81] = 'D';
+    bytes[90] = '0';
+    assert_false(ultimate_view_decode(bytes, sizeof bytes, &v));
+    bytes[81] = '.';
+    bytes[91] = 'x';
+    assert_false(ultimate_view_decode(bytes, sizeof bytes, &v));
+    assert_memory_equal(&v, &before, sizeof v);
+}
+
 int main(void) {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_readme_examples),
         cmocka_unit_test(test_rejects_bad_views),
         cmocka_unit_test(test_actions),
         cmocka_unit_test(test_parse_line),
+        cmocka_unit_test(test_ultimate_view_and_actions),
+        cmocka_unit_test(test_rejects_bad_ultimate_views),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

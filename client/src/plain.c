@@ -22,6 +22,38 @@ static plain_ui P;
 
 static void print_board(app *a) {
     ttt_client *c = &a->client;
+    if (c->game == CLIENT_GAME_ULTIMATE) {
+        const ultimate_view *v = &c->ultimate_board;
+        printf("\nUltimate board (board and cell numbers are 0-8):\n");
+        printf("Board IDs run left-to-right, top-to-bottom. Empty cells show their 0-8 cell ID.\n");
+        printf("      0 1 2 | 3 4 5 | 6 7 8\n");
+        for (int r = 0; r < 9; r++) {
+            printf("   %d  ", r);
+            for (int col = 0; col < 9; col++) {
+                int board = (r / 3) * 3 + col / 3;
+                int cell = (r % 3) * 3 + col % 3;
+                char mark = v->local_status[board];
+                if (mark != 'X' && mark != 'O' && mark != 'D') mark = v->cells[board * UTT_CELLS + cell];
+                if (mark == '.') mark = (char)('0' + cell);
+                if (col > 0 && col % 3 == 0) printf("| ");
+                printf("%c ", mark == 'D' ? '=' : mark);
+            }
+            printf("\n");
+            if (r == 2 || r == 5) printf("      ------+-------+------\n");
+        }
+        if (client_in_match(c)) {
+            if (client_my_turn(c)) {
+                if (v->next_board < 0) printf("Your move (%c): choose any open board, then type board+cell (e.g. 48)\n", client_to_move(c));
+                else printf("Your move (%c): play in board %d, then type board+cell (e.g. %d4)\n",
+                            client_to_move(c), v->next_board, v->next_board);
+            } else {
+                printf("%s (%c) to move%s\n", client_name_of(c, c->active_id), client_to_move(c),
+                       v->me == 'S' ? "; you're watching" : "");
+            }
+        }
+        printf("\n");
+        return;
+    }
     const ttt_view *v = &c->board;
     printf("\n");
     for (int r = 0; r < 3; r++) {
@@ -35,7 +67,7 @@ static void print_board(app *a) {
         if (r < 2) printf("   ---+---+---\n");
     }
     if (client_in_match(c)) {
-        char tm = ttt_view_to_move(v);
+        char tm = client_to_move(c);
         if (client_my_turn(c)) printf("Your move (%c): type 1-9\n", tm);
         else printf("%s (%c) to move%s\n", client_name_of(c, c->active_id), tm, v->me == 'S' ? "; you're watching" : "");
     }
@@ -78,7 +110,8 @@ static void help(void) {
     printf("commands:\n"
            "  quick | create | create public | join <id> | list     find a game\n"
            "  ready | unready                                       ready up (again, for a rematch)\n"
-           "  1-9 | move <1-9>                                      place your mark (1 = top-left)\n"
+           "  tictactoe: 1-9 | move <1-9>                          place your mark\n"
+           "  ultimate: 00-88 | move <board><cell>                 both digits are 0-8\n"
            "  resign | leave | board | who | reconnect | quit\n");
     fflush(stdout);
 }
@@ -124,6 +157,12 @@ static void command(app *a, char *line) {
     else if (strcmp(line, "board") == 0) {
         if (c->has_board) print_board(a);
         else printf("no board yet\n");
+    } else if (c->game == CLIENT_GAME_ULTIMATE &&
+               ((strcmp(line, "move") == 0 && arg && arg[0] >= '0' && arg[0] <= '8' &&
+                 arg[1] >= '0' && arg[1] <= '8' && !arg[2]) ||
+                (line[0] >= '0' && line[0] <= '8' && line[1] >= '0' && line[1] <= '8' && !line[2]))) {
+        const char *move = arg ? arg : line;
+        client_cmd_ultimate_move(c, move[0] - '0', move[1] - '0', a->guard);
     } else if ((strcmp(line, "move") == 0 && arg && arg[0] >= '1' && arg[0] <= '9' && !arg[1]) ||
                (line[0] >= '1' && line[0] <= '9' && !line[1])) {
         int cell = (arg ? arg[0] : line[0]) - '1';

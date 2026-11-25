@@ -31,6 +31,14 @@ static const char *SID = "s-1";
 #define ROSTER_PLAYING "p-ada:Ada:player:0:1;p-bob:Bob:player:0:1"
 #define ANN_START "x_player=p-ada;o_player=p-bob;moves=0"
 
+static void ultimate_view_string(char view[UTT_VIEW_LEN + 1], char status, char me, int next_board) {
+    memset(view, '.', UTT_VIEW_LEN - 2);
+    view[90] = next_board < 0 ? '.' : (char)('0' + next_board);
+    view[91] = status;
+    view[92] = me;
+    view[UTT_VIEW_LEN] = '\0';
+}
+
 static ttt_client *new_client(void) {
     ttt_client *c = malloc(sizeof *c);
     client_init(c, "Ada", "test-client");
@@ -228,6 +236,66 @@ static void test_list_sessions(void **s) {
     assert_true(c->listed[0].joinable);
     assert_string_equal(c->listed[0].owner_name, "Owner");
     assert_false(c->listed[1].joinable);
+    destroy(c);
+}
+
+static void test_ultimate_game_selection_and_listing(void **s) {
+    (void)s;
+    ttt_client *c = signed_in();
+    client_set_game(c, CLIENT_GAME_ULTIMATE);
+    assert_string_equal(client_game_id(c), UTT_GAME_ID);
+    assert_true(client_cmd_list_sessions(c));
+    CM *m = expect(c, RAMSERVER__V1__CLIENT_MESSAGE__PAYLOAD_LIST_SESSIONS_REQUEST);
+    assert_string_equal(m->list_sessions_request->game_id, UTT_GAME_ID);
+    free_cm(m);
+    const char *ids[] = {"u-1"};
+    bool joinable[] = {true};
+    feed(c, sm_list_game(1, ids, joinable, UTT_GAME_ID));
+    assert_true(c->listed_valid);
+    assert_int_equal(c->n_listed, 1);
+    assert_string_equal(c->listed[0].id, "u-1");
+    destroy(c);
+}
+
+static void test_ultimate_join_view_and_moves(void **s) {
+    (void)s;
+    ttt_client *c = signed_in();
+    client_set_game(c, CLIENT_GAME_ULTIMATE);
+    assert_true(client_cmd_quick_match(c));
+    CM *m = expect(c, RAMSERVER__V1__CLIENT_MESSAGE__PAYLOAD_JOIN_SESSION_REQUEST);
+    assert_string_equal(m->join_session_request->game_id, UTT_GAME_ID);
+    uint64_t seq = m->sequence;
+    free_cm(m);
+    feed(c, sm_state(seq, SID, ST_WAITING, 3, ROSTER_UNREADY, NULL, NULL, NULL));
+    drain(c);
+
+    char view[UTT_VIEW_LEN + 1];
+    ultimate_view_string(view, 'X', 'X', -1);
+    feed(c, sm_state(0, SID, ST_IN_PROGRESS, 10, ROSTER_PLAYING, view, ME, ANN_START));
+    assert_true(client_in_match(c));
+    assert_true(client_my_turn(c));
+    assert_int_equal(c->ultimate_board.next_board, -1);
+    assert_true(client_cmd_ultimate_move(c, 4, 8, true));
+    m = expect(c, RAMSERVER__V1__CLIENT_MESSAGE__PAYLOAD_ACTION_REQUEST);
+    assert_int_equal(m->action_request->encoded_action.len, 2);
+    assert_memory_equal(m->action_request->encoded_action.data, "48", 2);
+    assert_int_equal(m->action_request->expected_state_version, 10);
+    uint64_t move_seq = m->sequence;
+    free_cm(m);
+
+    ultimate_view_string(view, 'O', 'O', 8);
+    view[4 * UTT_CELLS + 8] = 'X';
+    feed(c, sm_state(move_seq, SID, ST_IN_PROGRESS, 11, ROSTER_PLAYING, view, ME,
+                     "x_player=p-bob;o_player=p-ada;moves=1;last_move=4,8"));
+    assert_int_equal(c->last_move, 4 * UTT_CELLS + 8);
+    assert_true(client_my_turn(c));
+    assert_false(client_cmd_ultimate_move(c, 4, 0, true));
+    assert_int_equal(client_outbox_count(c), 0);
+    assert_true(log_has(c, "You must play in board 8"));
+    assert_true(client_cmd_ultimate_move(c, 8, 0, true));
+    m = expect(c, RAMSERVER__V1__CLIENT_MESSAGE__PAYLOAD_ACTION_REQUEST);
+    assert_memory_equal(m->action_request->encoded_action.data, "80", 2);
+    free_cm(m);
     destroy(c);
 }
 
@@ -654,8 +722,10 @@ int main(void) {
         cmocka_unit_test(test_join_errors_return_to_lobby),
         cmocka_unit_test(test_commands_refused_in_wrong_phase),
         cmocka_unit_test(test_list_sessions),
+        cmocka_unit_test(test_ultimate_game_selection_and_listing),
         cmocka_unit_test(test_ready_toggle_and_roster),
         cmocka_unit_test(test_match_start_and_move),
+        cmocka_unit_test(test_ultimate_join_view_and_moves),
         cmocka_unit_test(test_server_errors_on_moves_are_shown),
         cmocka_unit_test(test_stale_and_foreign_updates_ignored),
         cmocka_unit_test(test_bad_view_is_reported_not_drawn),

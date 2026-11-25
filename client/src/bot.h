@@ -1,5 +1,4 @@
-/* A tic-tac-toe opponent for --bot mode: chooses a move from the board in a view, never touching the
- * network itself. */
+/* Opponents for --bot mode: choose moves from views, never touching the network. */
 #ifndef TTT_BOT_H
 #define TTT_BOT_H
 
@@ -11,5 +10,8 @@ typedef enum { BOT_PERFECT, BOT_CASUAL } bot_skill;
  * BOT_PERFECT never loses; BOT_CASUAL plays a random move a third of the time. seed varies the choice
  * among equally good moves. */
 int bot_choose(const char cells[TTT_CELLS], char mark, bot_skill skill, unsigned *seed);
+
+/* Selects a legal Ultimate board/cell pair; returns false if no move is available. */
+bool bot_choose_ultimate(const ultimate_view *view, unsigned *seed, int *board, int *cell);
 
 #endif

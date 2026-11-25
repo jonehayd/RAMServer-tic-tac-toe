@@ -158,6 +158,14 @@ void client_init(ttt_client *c, const char *display_name, const char *client_nam
     reset_session(c);
 }
 
+void client_set_game(ttt_client *c, client_game selected) {
+    c->game = selected == CLIENT_GAME_ULTIMATE ? CLIENT_GAME_ULTIMATE : CLIENT_GAME_TICTACTOE;
+}
+
+const char *client_game_id(const ttt_client *c) {
+    return c->game == CLIENT_GAME_ULTIMATE ? UTT_GAME_ID : TTT_GAME_ID;
+}
+
 void client_free(ttt_client *c) { clear_outbox(c); }
 
 void client_connected(ttt_client *c) {
@@ -210,7 +218,7 @@ static bool require_lobby(ttt_client *c) {
 static bool join(ttt_client *c, const char *session_id, bool create_new, bool private_session) {
     if (!require_lobby(c)) return false;
     uint64_t seq = next_seq(c);
-    enqueue(c, proto_join(seq, TTT_GAME_ID, session_id, create_new, private_session), REQ_JOIN, seq);
+    enqueue(c, proto_join(seq, client_game_id(c), session_id, create_new, private_session), REQ_JOIN, seq);
     reset_session(c);
     c->private_session = create_new && private_session;
     c->phase = PHASE_JOINING;
@@ -250,7 +258,7 @@ bool client_cmd_list_sessions(ttt_client *c) {
         return false;
     }
     uint64_t seq = next_seq(c);
-    enqueue(c, proto_list_sessions(seq, TTT_GAME_ID), REQ_LIST, seq);
+    enqueue(c, proto_list_sessions(seq, client_game_id(c)), REQ_LIST, seq);
     return true;
 }
 
@@ -294,6 +302,10 @@ static bool send_action(ttt_client *c, const uint8_t *action, size_t len) {
 }
 
 bool client_cmd_move(ttt_client *c, int cell, bool guard) {
+    if (c->game != CLIENT_GAME_TICTACTOE) {
+        client_logf(c, LOG_WARN, "Use a board and cell for an Ultimate Tic-Tac-Toe move");
+        return false;
+    }
     if (cell < 0 || cell >= TTT_CELLS) return false;
     if (c->phase != PHASE_SESSION || (guard && !client_in_match(c))) {
         client_logf(c, LOG_WARN, "There's no match in progress");
@@ -320,6 +332,43 @@ bool client_cmd_move(ttt_client *c, int cell, bool guard) {
     uint8_t action[1];
     ttt_action_move(cell, action);
     return send_action(c, action, sizeof action);
+}
+
+bool client_cmd_ultimate_move(ttt_client *c, int board, int cell, bool guard) {
+    if (c->game != CLIENT_GAME_ULTIMATE || board < 0 || board >= UTT_BOARDS || cell < 0 || cell >= UTT_CELLS) return false;
+    if (c->phase != PHASE_SESSION || (guard && !client_in_match(c))) {
+        client_logf(c, LOG_WARN, "There's no match in progress");
+        return false;
+    }
+    if (guard) {
+        if (!client_is_player(c)) {
+            client_logf(c, LOG_WARN, "Spectators can't move");
+            return false;
+        }
+        if (!client_my_turn(c)) {
+            client_logf(c, LOG_WARN, "It's %s's turn", client_name_of(c, c->active_id));
+            return false;
+        }
+        if (c->ultimate_board.next_board >= 0 && c->ultimate_board.next_board != board) {
+            client_logf(c, LOG_WARN, "You must play in board %d", c->ultimate_board.next_board);
+            return false;
+        }
+        if (c->ultimate_board.local_status[board] != '.') {
+            client_logf(c, LOG_WARN, "Board %d is already finished", board);
+            return false;
+        }
+        if (c->ultimate_board.cells[board * UTT_CELLS + cell] != '.') {
+            client_logf(c, LOG_WARN, "Cell %d in board %d is taken", cell, board);
+            return false;
+        }
+        if (client_has_pending(c, REQ_ACTION)) {
+            client_logf(c, LOG_WARN, "Waiting for the server to answer your last move...");
+            return false;
+        }
+    }
+    uint8_t action[2];
+    size_t len = ultimate_action_move(board, cell, action);
+    return len == sizeof action && send_action(c, action, len);
 }
 
 bool client_cmd_resign(ttt_client *c) {
@@ -366,17 +415,27 @@ const char *client_name_of(const ttt_client *c, const char *id) {
 }
 
 bool client_in_match(const ttt_client *c) {
-    return c->phase == PHASE_SESSION && c->status == STATUS(IN_PROGRESS) && c->has_board && c->board_live &&
-           ttt_view_running(&c->board);
+    if (c->phase != PHASE_SESSION || c->status != STATUS(IN_PROGRESS) || !c->has_board || !c->board_live) return false;
+    return c->game == CLIENT_GAME_ULTIMATE ? ultimate_view_running(&c->ultimate_board) : ttt_view_running(&c->board);
 }
 
 bool client_is_player(const ttt_client *c) {
-    if (c->has_board) return c->board.me == 'X' || c->board.me == 'O';
+    if (c->has_board) {
+        char me = c->game == CLIENT_GAME_ULTIMATE ? c->ultimate_board.me : c->board.me;
+        return me == 'X' || me == 'O';
+    }
     const member *me = client_me(c);
     return me && strcmp(me->role, "player") == 0;
 }
 
-bool client_my_turn(const ttt_client *c) { return client_in_match(c) && ttt_view_my_turn(&c->board); }
+bool client_my_turn(const ttt_client *c) {
+    if (!client_in_match(c)) return false;
+    return c->game == CLIENT_GAME_ULTIMATE ? ultimate_view_my_turn(&c->ultimate_board) : ttt_view_my_turn(&c->board);
+}
+
+char client_to_move(const ttt_client *c) {
+    return c->game == CLIENT_GAME_ULTIMATE ? ultimate_view_to_move(&c->ultimate_board) : ttt_view_to_move(&c->board);
+}
 
 int client_wins(const ttt_client *c, const char *id) {
     int n = 0;
@@ -459,7 +518,10 @@ static void on_match_result(ttt_client *c, const Ramserver__V1__MatchResult *r) 
     c->has_result = true;
     const char *how = client_result_how(&res);
     if (res.draw) {
-        client_logf(c, LOG_INFO, "Draw, by %s, after %u turns", how, res.turns);
+        if (c->game == CLIENT_GAME_ULTIMATE && strcmp(res.termination, "DRAW") == 0)
+            client_logf(c, LOG_INFO, "Draw: all local boards resolved, after %u turns", res.turns);
+        else
+            client_logf(c, LOG_INFO, "Draw, by %s, after %u turns", how, res.turns);
     } else if (str_eq(res.winner, c->player_id)) {
         client_logf(c, LOG_GOOD, "You win by %s!", how);
     } else if (client_is_player(c)) {
@@ -504,7 +566,13 @@ static void read_annotations(ttt_client *c, const Ramserver__V1__StateUpdate *u)
         if (strcmp(k, "x_player") == 0) COPY(c->x_player, v);
         else if (strcmp(k, "o_player") == 0) COPY(c->o_player, v);
         else if (strcmp(k, "moves") == 0) c->moves = atoi(v);
-        else if (strcmp(k, "last_move") == 0) c->last_move = (v[0] >= '0' && v[0] <= '8' && !v[1]) ? v[0] - '0' : -1;
+        else if (strcmp(k, "last_move") == 0) {
+            if (c->game == CLIENT_GAME_ULTIMATE && v[0] >= '0' && v[0] <= '8' && v[1] == ',' &&
+                v[2] >= '0' && v[2] <= '8' && !v[3])
+                c->last_move = (v[0] - '0') * UTT_CELLS + (v[2] - '0');
+            else
+                c->last_move = (v[0] >= '0' && v[0] <= '8' && !v[1]) ? v[0] - '0' : -1;
+        }
         else if (strcmp(k, "winning_line") == 0) c->has_line = ttt_parse_line(v, c->line);
         else if (strcmp(k, "resigned") == 0) c->resigned = (v[0] == 'X' || v[0] == 'O') ? v[0] : 0;
         /* unknown keys are ignored */
@@ -557,7 +625,22 @@ static void on_state_update(ttt_client *c, const Ramserver__V1__StateUpdate *u, 
     /* Board. A valid view is always kept (so a final position is shown however the server labels that
      * update); it is playable only while the session is in progress. */
     ttt_view v;
-    bool decoded = ttt_view_decode(u->encoded_view.data, u->encoded_view.len, &v);
+    ultimate_view uv;
+    char me = 0;
+    bool decoded;
+    if (c->game == CLIENT_GAME_ULTIMATE) {
+        decoded = ultimate_view_decode(u->encoded_view.data, u->encoded_view.len, &uv);
+        if (decoded) {
+            c->ultimate_board = uv;
+            me = uv.me;
+        }
+    } else {
+        decoded = ttt_view_decode(u->encoded_view.data, u->encoded_view.len, &v);
+        if (decoded) {
+            c->board = v;
+            me = v.me;
+        }
+    }
     bool live = decoded && c->status == STATUS(IN_PROGRESS);
     if (decoded) {
         bool new_match = live && (old_status != STATUS(IN_PROGRESS) || !c->board_live);
@@ -565,13 +648,12 @@ static void on_state_update(ttt_client *c, const Ramserver__V1__StateUpdate *u, 
             reset_board(c);
             c->has_result = false;
         }
-        c->board = v;
         c->has_board = true;
         c->board_live = live;
         read_annotations(c, u);
         if (new_match) {
-            if (v.me == 'S') client_logf(c, LOG_GOOD, "Match started: you're watching");
-            else client_logf(c, LOG_GOOD, "Match started: you are %c%s", v.me, v.me == 'X' ? " and move first" : "");
+            if (me == 'S') client_logf(c, LOG_GOOD, "Match started: you're watching");
+            else client_logf(c, LOG_GOOD, "Match started: you are %c%s", me, me == 'X' ? " and move first" : "");
         }
     } else {
         if (u->encoded_view.len > 0)
@@ -596,7 +678,7 @@ static void on_list_sessions(ttt_client *c, const Ramserver__V1__ListSessionsRes
     c->n_listed = 0;
     for (size_t i = 0; i < r->n_sessions && c->n_listed < TTT_MAX_LISTED; i++) {
         const Ramserver__V1__SessionInfo *s = r->sessions[i];
-        if (!str_eq(s->game_id, TTT_GAME_ID)) continue;
+        if (!str_eq(s->game_id, client_game_id(c))) continue;
         listed_session *l = &c->listed[c->n_listed++];
         COPY(l->id, s->session_id);
         l->status = (int)s->status;

@@ -3,10 +3,9 @@
 // makes no claim to match it beyond what those documents say: it exists so two clients can play complete
 // matches in `make test` without a server build.
 //
-// It speaks the protocol over plain TCP and runs the real tic-tac-toe ruleset (rulesets/tictactoe)
-// through the game.Game interface, the way the documents describe the server doing it. It sends
-// heartbeats every -heartbeat and counts the clients' heartbeat replies, printing totals when it gets
-// SIGTERM or SIGINT.
+// It speaks the protocol over plain TCP and runs the real tic-tac-toe rulesets through the game.Game
+// interface, the way the documents describe the server doing it. It sends heartbeats every -heartbeat
+// and counts the clients' heartbeat replies, printing totals when it gets SIGTERM or SIGINT.
 //
 // Protobuf is encoded by hand (protowire.go) so the module needs no dependencies.
 package main
@@ -33,6 +32,7 @@ import (
 	"github.com/stevenlagoy/ramserver-core/server/game"
 
 	"ramserver-tictactoe/rulesets/tictactoe"
+	"ramserver-tictactoe/rulesets/ultimatetictactoe"
 )
 
 const maxPayload = 65536
@@ -103,6 +103,8 @@ type player struct {
 
 type session struct {
 	id                 string
+	gameID             string
+	rules              game.Game
 	private            bool
 	members            []*player
 	roles              map[string]game.Role
@@ -117,7 +119,7 @@ type session struct {
 
 type server struct {
 	mu       sync.Mutex
-	game     game.Game
+	games    map[string]game.Game
 	sessions []*session
 	nextID   int
 }
@@ -148,7 +150,10 @@ func main() {
 		os.Exit(0)
 	}()
 
-	s := &server{game: &tictactoe.Game{}}
+	s := &server{games: map[string]game.Game{
+		tictactoe.Name:         &tictactoe.Game{},
+		ultimatetictactoe.Name: &ultimatetictactoe.Game{},
+	}}
 	for {
 		nc, err := ln.Accept()
 		if err != nil {
@@ -323,7 +328,7 @@ func (s *server) handle(c *conn, payload []byte) {
 		var r enc
 		r.str(1, p.id)
 		if p.session.playing {
-			for _, a := range s.game.LegalActions(p.session.state, p.id) {
+			for _, a := range p.session.rules.LegalActions(p.session.state, p.id) {
 				var spec enc
 				spec.bytes(1, a.Payload)
 				spec.str(2, a.Description)
@@ -334,12 +339,12 @@ func (s *server) handle(c *conn, payload []byte) {
 	case field == 9:
 		var r enc
 		for _, ss := range s.sessions {
-			if ss.private || len(ss.members) == 0 {
+			if ss.gameID != req.str(1) || ss.private || len(ss.members) == 0 {
 				continue
 			}
 			var info enc
 			info.str(1, ss.id)
-			info.str(2, tictactoe.Name)
+			info.str(2, ss.gameID)
 			info.uint(3, uint64(ss.status()))
 			for _, m := range ss.members {
 				info.msg(4, s.playerMsg(ss, m))
@@ -377,7 +382,7 @@ func (s *server) seat(ss *session) game.Role {
 	for _, r := range ss.roles {
 		counts[r]++
 	}
-	for _, spec := range s.game.Roles() {
+	for _, spec := range ss.rules.Roles() {
 		if spec.Max == 0 || counts[spec.Name] < spec.Max {
 			return spec.Name
 		}
@@ -394,7 +399,7 @@ func (s *server) join(c *conn, seq uint64, req fields) {
 	case gameID == "":
 		replyError(c, seq, errInvalidArgument, "game_id is empty", "")
 		return
-	case gameID != tictactoe.Name:
+	case s.games[gameID] == nil:
 		replyError(c, seq, errUnknownGame, fmt.Sprintf("game: unknown game %q", gameID), "")
 		return
 	case create && sid != "", private && !create:
@@ -419,9 +424,13 @@ func (s *server) join(c *conn, seq uint64, req fields) {
 			replyError(c, seq, errSessionNotJoinable, "session is full or already playing", sid)
 			return
 		}
+		if ss.gameID != gameID {
+			replyError(c, seq, errSessionNotJoinable, "session belongs to a different game", sid)
+			return
+		}
 	} else if !create {
 		for _, x := range s.sessions {
-			if !x.private && len(x.members) > 0 && s.joinable(x) {
+			if x.gameID == gameID && !x.private && len(x.members) > 0 && s.joinable(x) {
 				ss = x
 				break
 			}
@@ -429,7 +438,7 @@ func (s *server) join(c *conn, seq uint64, req fields) {
 	}
 	if ss == nil {
 		s.nextID++
-		ss = &session{id: fmt.Sprintf("s-%d-%s", s.nextID, newID("")[:6]), private: private,
+		ss = &session{id: fmt.Sprintf("s-%d-%s", s.nextID, newID("")[:6]), gameID: gameID, rules: s.games[gameID], private: private,
 			roles: map[string]game.Role{}, ready: map[string]bool{}, accepted: map[string]int{}, rejected: map[string]int{}}
 		s.sessions = append(s.sessions, ss)
 	}
@@ -480,14 +489,14 @@ func (s *server) setReady(c *conn, seq uint64, req fields) {
 	}
 	ss.ready[p.id] = req.boolean(2)
 	ss.version++
-	if s.game.ReadyToStart(ss.roles, ss.ready) {
+	if ss.rules.ReadyToStart(ss.roles, ss.ready) {
 		s.start(ss)
 	}
 	s.broadcast(ss, p, seq)
 }
 
 func (s *server) maybeStart(ss *session) {
-	if s.game.ReadyToStart(ss.roles, ss.ready) {
+	if ss.rules.ReadyToStart(ss.roles, ss.ready) {
 		s.start(ss)
 		s.broadcast(ss, nil, 0)
 	}
@@ -502,7 +511,7 @@ func (s *server) start(ss *session) {
 	for k, v := range ss.roles {
 		roles[k] = v
 	}
-	ss.state = s.game.NewState(order, roles)
+	ss.state = ss.rules.NewState(order, roles)
 	ss.playing = true
 	ss.turns = 0
 	ss.accepted, ss.rejected = map[string]int{}, map[string]int{}
@@ -532,19 +541,19 @@ func (s *server) action(c *conn, seq uint64, req fields) {
 	}
 	payload, _ := req.bytes(2)
 	a := game.Action{ID: seq, ActorID: p.id, Payload: payload}
-	active := s.game.ActiveTurn(ss.state)
+	active := ss.rules.ActiveTurn(ss.state)
 	inTurn := false
 	for _, id := range active {
 		inTurn = inTurn || id == p.id
 	}
 	if !inTurn {
-		o, ok := s.game.(game.OutOfTurnActions)
+		o, ok := ss.rules.(game.OutOfTurnActions)
 		if !ok || !o.AllowsOutOfTurn(ss.state, a) {
 			reject(errOutOfTurn, "it is not your turn")
 			return
 		}
 	}
-	if err := s.game.Validate(ss.state, a); err != nil {
+	if err := ss.rules.Validate(ss.state, a); err != nil {
 		if errors.Is(err, game.ErrMalformedAction) {
 			reject(errMalformed, err.Error())
 		} else {
@@ -552,12 +561,12 @@ func (s *server) action(c *conn, seq uint64, req fields) {
 		}
 		return
 	}
-	ss.state = s.game.Apply(ss.state, a)
+	ss.state = ss.rules.Apply(ss.state, a)
 	ss.accepted[p.id]++
 	ss.turns++
 	ss.version++
 	s.broadcast(ss, p, seq)
-	if res, over := s.game.Outcome(ss.state); over {
+	if res, over := ss.rules.Outcome(ss.state); over {
 		matchesFinished.Add(1)
 		var mr enc
 		mr.str(1, ss.id)
@@ -605,15 +614,15 @@ func (s *server) broadcast(ss *session, requester *player, seq uint64) {
 	for _, m := range ss.members {
 		var u enc
 		u.str(1, ss.id)
-		u.str(2, tictactoe.Name)
+		u.str(2, ss.gameID)
 		u.uint(3, uint64(ss.status()))
 		for _, x := range ss.members {
 			u.msg(4, s.playerMsg(ss, x))
 		}
 		u.uint(5, ss.version)
 		if ss.playing {
-			u.bytes(6, s.game.ViewFor(ss.state, m.id))
-			if active := s.game.ActiveTurn(ss.state); len(active) == 1 {
+			u.bytes(6, ss.rules.ViewFor(ss.state, m.id))
+			if active := ss.rules.ActiveTurn(ss.state); len(active) == 1 {
 				u.str(7, active[0])
 			}
 			for _, x := range ss.members {
@@ -623,7 +632,7 @@ func (s *server) broadcast(ss *session, requester *player, seq uint64) {
 			}
 		}
 		u.str(9, ss.members[0].id)
-		if a, ok := s.game.(game.Annotator); ok && ss.playing {
+		if a, ok := ss.rules.(game.Annotator); ok && ss.playing {
 			for k, v := range a.Annotations(ss.state, m.id) {
 				var e enc
 				e.str(1, k)

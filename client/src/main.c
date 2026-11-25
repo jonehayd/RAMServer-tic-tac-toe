@@ -13,7 +13,7 @@ static void usage(FILE *f) {
     fprintf(f,
             "Usage: ttt [options]\n"
             "\n"
-            "Play tic-tac-toe against other people through a RAMServer.\n"
+            "Play tic-tac-toe or Ultimate Tic-Tac-Toe through a RAMServer.\n"
             "\n"
             "Server (without one, the full-screen UI asks):\n"
             "  -s, --server SPEC   local      plain TCP to 127.0.0.1:8080\n"
@@ -21,6 +21,7 @@ static void usage(FILE *f) {
             "                      hosted     wss://ramserver-core-80752473398.us-east5.run.app/connect\n"
             "                      HOST:PORT, tcp://HOST:PORT, ws://HOST[:PORT][/PATH], wss://...\n"
             "  -n, --name NAME     your display name (default: $TTT_NAME or $USER)\n"
+            "  -g, --game GAME     tictactoe (default) or ultimate\n"
             "\n"
             "Finding a game once signed in (otherwise choose in the lobby):\n"
             "      --quick         quick match\n"
@@ -36,7 +37,7 @@ static void usage(FILE *f) {
             "      --no-guard      send every move to the server, even ones it will refuse\n"
             "\n"
             "Bot (plays for you, through the server like anyone else):\n"
-            "      --bot           ready up and play automatically, perfectly\n"
+            "      --bot           ready up and play automatically (perfect in standard tic-tac-toe)\n"
             "      --casual        with --bot: make a random move a third of the time\n"
             "      --games N       with --bot: leave and quit after N matches\n"
             "      --delay MS      with --bot: think for MS milliseconds per move (default 700)\n"
@@ -59,6 +60,7 @@ int main(int argc, char **argv) {
     if (!name || !*name) name = getenv("USER");
     if (!name || !*name) name = "player";
     bool plain = false, bot = false, casual = false;
+    client_game selected_game = CLIENT_GAME_TICTACTOE;
     int games = 0, delay = -1;
     join_mode join = JOIN_NONE;
     const char *join_id = NULL;
@@ -70,6 +72,15 @@ int main(int argc, char **argv) {
         const char *a = argv[i];
         if (!strcmp(a, "-s") || !strcmp(a, "--server")) server = need_arg(argc, argv, &i);
         else if (!strcmp(a, "-n") || !strcmp(a, "--name")) name = need_arg(argc, argv, &i);
+        else if (!strcmp(a, "-g") || !strcmp(a, "--game")) {
+            const char *game = need_arg(argc, argv, &i);
+            if (!strcmp(game, "tictactoe")) selected_game = CLIENT_GAME_TICTACTOE;
+            else if (!strcmp(game, "ultimate")) selected_game = CLIENT_GAME_ULTIMATE;
+            else {
+                fprintf(stderr, "ttt: unknown game %s (choose tictactoe or ultimate)\n", game);
+                return 2;
+            }
+        }
         else if (!strcmp(a, "--quick")) join = JOIN_QUICK;
         else if (!strcmp(a, "--create")) join = JOIN_CREATE_PRIVATE;
         else if (!strcmp(a, "--create-public")) join = JOIN_CREATE_PUBLIC;
@@ -98,6 +109,7 @@ int main(int argc, char **argv) {
 
     static app a; /* large: keep it off the stack */
     app_init(&a, display);
+    client_set_game(&a.client, selected_game);
     a.guard = guard;
     a.bot = bot;
     a.skill = casual ? BOT_CASUAL : BOT_PERFECT;

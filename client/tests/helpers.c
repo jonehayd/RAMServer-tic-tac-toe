@@ -137,7 +137,7 @@ sm_bytes sm_state(uint64_t in_reply_to, const char *session_id, int status, uint
     return pack(&m);
 }
 
-sm_bytes sm_list(int n, const char *const *ids, const bool *joinable) {
+sm_bytes sm_list_game(int n, const char *const *ids, const bool *joinable, const char *game_id) {
     Ramserver__V1__SessionInfo infos[8], *ip[8];
     Ramserver__V1__SessionPlayer owner = RAMSERVER__V1__SESSION_PLAYER__INIT, *op[1] = {&owner};
     owner.player_id = "owner-1";
@@ -146,7 +146,7 @@ sm_bytes sm_list(int n, const char *const *ids, const bool *joinable) {
     for (int i = 0; i < n && i < 8; i++) {
         ramserver__v1__session_info__init(&infos[i]);
         infos[i].session_id = (char *)ids[i];
-        infos[i].game_id = "tictactoe";
+        infos[i].game_id = (char *)(game_id ? game_id : "tictactoe");
         infos[i].status = RAMSERVER__V1__SESSION_STATUS__SESSION_STATUS_WAITING;
         infos[i].joinable = joinable[i];
         infos[i].owner_player_id = "owner-1";
@@ -161,6 +161,10 @@ sm_bytes sm_list(int n, const char *const *ids, const bool *joinable) {
     m.payload_case = RAMSERVER__V1__SERVER_MESSAGE__PAYLOAD_LIST_SESSIONS_RESPONSE;
     m.list_sessions_response = &r;
     return pack(&m);
+}
+
+sm_bytes sm_list(int n, const char *const *ids, const bool *joinable) {
+    return sm_list_game(n, ids, joinable, "tictactoe");
 }
 
 sm_bytes sm_history(const char *session_id, int n, const char *const *winners) {

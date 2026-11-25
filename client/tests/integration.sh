@@ -6,7 +6,8 @@
 #   1. Alice creates a private session; Bob joins it by id; Cy joins as a spectator. Alice and Bob
 #      play three matches (each a rematch of the last) with --bot --casual, then leave and quit.
 #   2. Dee and Eve find each other with quick match and play one match.
-#   3. A client with --no-guard sends a move out of turn, and shows the server's OUT_OF_TURN error.
+#   3. Uma and Vic play Ultimate Tic-Tac-Toe using the selected game id and two-digit moves.
+#   4. A client with --no-guard sends a move out of turn, and shows the server's OUT_OF_TURN error.
 #
 # Usage: tests/integration.sh BUILD_DIR   (BUILD_DIR holds ttt and fakeserver)
 set -euo pipefail
@@ -68,7 +69,7 @@ wait "$ALICE" || fail "Alice exited with $?"
 wait "$BOB" || fail "Bob exited with $?"
 wait "$CY" || fail "Cy exited with $?"
 
-results() { grep -cE '^(You win by|Draw, by|.* wins by)' "$1" || true; }
+results() { grep -cE '^(You win by|Draw(, by|:)|.* wins by)' "$1" || true; }
 [ "$(results "$WORK/alice.log")" = 3 ] || fail "Alice saw $(results "$WORK/alice.log") results, want 3"
 [ "$(results "$WORK/bob.log")" = 3 ] || fail "Bob saw $(results "$WORK/bob.log") results, want 3"
 [ "$(results "$WORK/cy.log")" = 3 ] || fail "Cy saw $(results "$WORK/cy.log") results, want 3"
@@ -91,7 +92,20 @@ wait "$EVE" || fail "Eve exited with $?"
 grep -q "Dee joined as player" "$WORK/eve.log" || grep -q "Eve joined as player" "$WORK/dee.log" || fail "Dee and Eve weren't matched"
 echo "ok: quick match"
 
-# ---- 3. a server error reaches the player ----
+# ---- 3. Ultimate Tic-Tac-Toe ----
+"$TTT" --plain -s "$SERVER" -n Uma --game ultimate --create-public --bot --games 1 --delay 5 </dev/null >"$WORK/uma.log" 2>&1 &
+UMA=$!
+wait_for "$WORK/uma.log" 's/^Joined session //p' >/dev/null || fail "Uma didn't create an Ultimate session"
+"$TTT" --plain -s "$SERVER" -n Vic --game ultimate --quick --bot --games 1 --delay 5 </dev/null >"$WORK/vic.log" 2>&1 &
+VIC=$!
+wait "$UMA" || fail "Uma exited with $?"
+wait "$VIC" || fail "Vic exited with $?"
+[ "$(results "$WORK/uma.log")" = 1 ] || fail "Uma didn't finish an Ultimate match"
+[ "$(results "$WORK/vic.log")" = 1 ] || fail "Vic didn't finish an Ultimate match"
+grep -q "Bot plays in board" "$WORK/uma.log" || fail "Uma didn't send an Ultimate board/cell move"
+echo "ok: Ultimate game selection and two-digit moves"
+
+# ---- 4. a server error reaches the player ----
 # Gil is X and moves first; Fay (O) types a move immediately, out of turn, with the local guard off.
 FIFO="$WORK/fay.in"
 mkfifo "$FIFO"

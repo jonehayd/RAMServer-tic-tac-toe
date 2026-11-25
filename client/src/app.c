@@ -249,10 +249,18 @@ static void bot_step(app *a, uint64_t now) {
             return;
         }
         if (now < a->bot_wait_until) return;
-        int cell = bot_choose(c->board.cells, c->board.me, a->skill, &a->seed);
-        if (cell >= 0) {
-            client_logf(c, LOG_INFO, "Bot plays %d (%s)", cell + 1, TTT_CELL_NAMES[cell]);
-            client_cmd_move(c, cell, a->guard);
+        if (c->game == CLIENT_GAME_ULTIMATE) {
+            int board, cell;
+            if (bot_choose_ultimate(&c->ultimate_board, &a->seed, &board, &cell)) {
+                client_logf(c, LOG_INFO, "Bot plays in board %d, cell %d", board, cell);
+                client_cmd_ultimate_move(c, board, cell, a->guard);
+            }
+        } else {
+            int cell = bot_choose(c->board.cells, c->board.me, a->skill, &a->seed);
+            if (cell >= 0) {
+                client_logf(c, LOG_INFO, "Bot plays %d (%s)", cell + 1, TTT_CELL_NAMES[cell]);
+                client_cmd_move(c, cell, a->guard);
+            }
         }
         a->bot_acted_version = c->state_version;
         a->bot_wait_until = 0;

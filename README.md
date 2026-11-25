@@ -22,7 +22,8 @@ the server through a documented protobuf protocol and never see each other direc
 | `docs/writing-a-client.md`           | How a client should connect, play, and handle errors.                                                                              |
 | `docs/servers.md`                    | The local and hosted servers, and how a new ruleset reaches them.                                                                  |
 | `proto/ramserver/v1/ramserver.proto` | The protocol schema. Generate client code from it.                                                                                 |
-| `rulesets/tictactoe/`                | The tic-tac-toe ruleset, its tests, and its README: the specification of the game's actions, views and annotations.                |
+| `rulesets/tictactoe/`                | The standard tic-tac-toe ruleset, tests, and game-encoding README.                                                                  |
+| `rulesets/ultimatetictactoe/`         | The Ultimate Tic-Tac-Toe ruleset, tests, and game-encoding README.                                                                  |
 | `client/`                            | The C client (`ttt`): terminal UI, protocol and networking, unit and integration tests. See `client/README.md`.                     |
 | `sdk/`                               | The server's public `game` package, which rulesets implement, and its compliance tests (`sdk/game/gametest`). See `sdk/README.md`. |
 | `go.mod`                             | This repository's Go module. It points the server's import path at `sdk/`, so nothing is downloaded.                               |
@@ -35,7 +36,8 @@ the server through a documented protobuf protocol and never see each other direc
 
 1. Open a connection (TCP, or WebSocket for the hosted server).
 2. Send `ConnectRequest`, then `AuthRequest` with a display name; you get a `player_id`.
-3. Send `JoinSessionRequest` with `game_id` `"tictactoe"` to quick-match, create, or join a session.
+3. Send `JoinSessionRequest` with `game_id` `"tictactoe"` or `"ultimate_tictactoe"` to quick-match,
+   create, or join a session. The client selects with `--game tictactoe` (default) or `--game ultimate`.
 4. Every member sends `SetReadyRequest`; when the game's start condition is met, the match starts.
 5. Players send `ActionRequest`s with game-defined bytes; everyone receives `StateUpdate`s with
    game-defined views.
@@ -65,8 +67,8 @@ docker compose run --rm dev bash        # a shell inside the container, to build
 **Without Docker (Debian/Ubuntu, including WSL):** install Go 1.24 or newer, run `make check-deps` to
 install the same packages, then `make test`.
 
-`make test` also runs the C client's tests (`make -C client test`). To play, build the client with
-`make -C client` and see `client/README.md`.
+`make test` also runs the C client's tests (`make -C client test`). To play either game, build the
+client with `make -C client` and see `client/README.md`.
 
 ## Versions
 

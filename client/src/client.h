@@ -38,6 +38,7 @@ typedef enum {
 typedef enum { REQ_NONE, REQ_CONNECT, REQ_AUTH, REQ_JOIN, REQ_LEAVE, REQ_READY, REQ_ACTION, REQ_LIST, REQ_HISTORY } req_kind;
 
 typedef enum { JOIN_NONE, JOIN_QUICK, JOIN_CREATE_PRIVATE, JOIN_CREATE_PUBLIC, JOIN_BY_ID } join_mode;
+typedef enum { CLIENT_GAME_TICTACTOE, CLIENT_GAME_ULTIMATE } client_game;
 
 typedef enum { LOG_INFO, LOG_GOOD, LOG_WARN, LOG_ERROR } log_level;
 
@@ -80,6 +81,7 @@ typedef struct {
     /* Identity and configuration */
     char display_name[TTT_NAME_MAX];
     char client_name[64];
+    client_game game;
     char player_id[TTT_ID_MAX];
     char reconnect_token[TTT_ID_MAX];
     bool resuming; /* the AuthRequest in flight tries to resume player_id */
@@ -107,6 +109,7 @@ typedef struct {
     bool has_board;
     bool board_live;
     ttt_view board;
+    ultimate_view ultimate_board;
     char x_player[TTT_ID_MAX];
     char o_player[TTT_ID_MAX];
     int moves;
@@ -144,6 +147,8 @@ typedef struct {
 
 void client_init(ttt_client *c, const char *display_name, const char *client_name);
 void client_free(ttt_client *c);
+void client_set_game(ttt_client *c, client_game selected);
+const char *client_game_id(const ttt_client *c);
 
 /* The connection is open: queues ConnectRequest. */
 void client_connected(ttt_client *c);
@@ -166,6 +171,7 @@ bool client_cmd_toggle_ready(ttt_client *c);
 /* guard: refuse locally when it's plainly not legal (not your turn, cell taken). With guard false the
  * move is sent anyway, so the server's own error is shown. */
 bool client_cmd_move(ttt_client *c, int cell, bool guard);
+bool client_cmd_ultimate_move(ttt_client *c, int board, int cell, bool guard);
 bool client_cmd_resign(ttt_client *c);
 
 /* Outbox: the network loop takes each message, frames it, sends it, and frees it. */
@@ -179,6 +185,7 @@ const member *client_member(const ttt_client *c, const char *id);
 const char *client_name_of(const ttt_client *c, const char *id); /* display name, or the id */
 bool client_in_match(const ttt_client *c);   /* a live board in an in-progress session */
 bool client_my_turn(const ttt_client *c);
+char client_to_move(const ttt_client *c);
 bool client_is_player(const ttt_client *c);
 bool client_has_pending(const ttt_client *c, req_kind kind);
 /* Wins for id, and draws, among this session's known results */
